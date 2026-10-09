@@ -5,13 +5,13 @@ import { Construct } from "constructs";
 import { RFC1918_CIDRS, cloudWanTagKey } from "../network-config";
 
 export interface PrivateVpcProps {
-  /** VPC CIDR ブロック */
+  /** VPC CIDR block */
   readonly vpcCidr: string;
   /** Cloud WAN Core Network ID */
   readonly coreNetworkId: string;
   /** Cloud WAN Core Network ARN */
   readonly coreNetworkArn: string;
-  /** Cloud WAN セグメント タグ値 */
+  /** Cloud WAN segment tag value */
   readonly cloudWanSegmentTag: string;
 }
 
@@ -104,7 +104,7 @@ export class PrivateVpc extends Construct {
       }
     );
 
-    // Private Subnet: 全トラフィックを Cloud WAN へ
+    // Private subnet: all traffic to Cloud WAN
     const coreNetworkRoute = new ec2.CfnRoute(
       this,
       "PrivateSubnetDefaultRoute",

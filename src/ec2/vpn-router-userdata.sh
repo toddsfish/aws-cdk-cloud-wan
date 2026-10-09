@@ -1,73 +1,73 @@
 #!/bin/bash -xe
 
-# CloudFormation Fn::Sub による変数置換について:
-# ${VPNID}, ${REGION}, ${VPC_CIDR} はデプロイ時に CloudFormation が実際の値に置換する。
-# ${!VAR} はシェル変数として EC2 起動時に展開される (Fn::Sub のエスケープ記法)。
+# Variable substitution via CloudFormation Fn::Sub:
+# ${VPNID}, ${REGION}, ${VPC_CIDR} are replaced by CloudFormation at deploy time.
+# ${!VAR} is expanded as a shell variable at EC2 boot (Fn::Sub escape syntax).
 
 #######################################
-# 1. パッケージ導入
+# 1. Install packages
 #######################################
 
-# IP フォワーディングを有効化 (VPN ルーターとしてパケットを転送するため)
+# Enable IP forwarding (router forwards packets)
 sysctl -w net.ipv4.ip_forward=1
 echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.d/99-vpn.conf
 sysctl -p /etc/sysctl.d/99-vpn.conf
 
-# IPsec (Libreswan) と関連ツールを導入
+# Install IPsec (Libreswan) and tools
 dnf install -y jq unzip libreswan
 
-# FRR は AL2023 標準リポジトリに含まれないため、SPAL から導入する
+# FRR is not in the AL2023 base repo; install from SPAL
 dnf install -y spal-release
 dnf install -y frr
 
 #######################################
-# 2. FRR デーモン設定
+# 2. FRR daemon config
 #######################################
 
-# BGP デーモンを有効化 (デフォルトでは無効)
+# Enable BGP daemon (disabled by default)
 sed -i "s/bgpd=.*/bgpd=yes/g" /etc/frr/daemons
 
-# zebra に -n フラグを追加して netns バックエンドを有効化する。
-# これにより FRR がネットワーク namespace (vrf1) 内のインターフェースを認識できる。
-# -n がないと vrf-id が -1 になり BGP セッションが確立しない。
+# Add -n to zebra to enable the netns backend.
+# This lets FRR see interfaces inside the network namespace (vrf1).
+# Without -n, vrf-id is -1 and the BGP session never establishes.
 sed -i 's/zebra_options=" *-A/zebra_options=" -n -A/g' /etc/frr/daemons
 
 #######################################
-# 3. Libreswan 初期化
+# 3. Libreswan init
 #######################################
 
-# NSS 暗号データベースを初期化 (Libreswan が証明書/鍵を管理するために使用)
+# Initialize NSS crypto DB (Libreswan stores certs/keys there)
 ipsec initnss 2>/dev/null || true
 
 #######################################
-# 4. IP アドレス / VPN トンネル情報の取得
+# 4. Fetch IP addresses / VPN tunnel info
 #######################################
 
-# IMDSv2 トークンを取得 (スクリプト後半でも IMDS を使うため、VPN 待機時間を考慮して TTL を長めに設定)
+# Get IMDSv2 token (long TTL: IMDS is used again after the VPN wait)
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 1800")
 CGW_IP_ADDRESS=$(curl -s -H "X-aws-ec2-metadata-token: ${!TOKEN}" http://169.254.169.254/latest/meta-data/public-ipv4)
 CGW_PRIVATE_IP_ADDRESS=$(curl -s -H "X-aws-ec2-metadata-token: ${!TOKEN}" http://169.254.169.254/latest/meta-data/local-ipv4)
 
-# AWS API から VPN トンネル情報を1回だけ取得 (API コール削減 + スロットリング回避)
+# Fetch VPN tunnel info from the AWS API once (fewer calls, avoids throttling)
 VPN_JSON=$(aws ec2 describe-vpn-connections --vpn-connection-ids ${VPNID} --region ${REGION} --no-cli-pager)
 OUTSIDE_IP_ADDRESS1=$(echo "${!VPN_JSON}" | jq -r '.VpnConnections[].Options.TunnelOptions[0].OutsideIpAddress')
 OUTSIDE_IP_ADDRESS2=$(echo "${!VPN_JSON}" | jq -r '.VpnConnections[].Options.TunnelOptions[1].OutsideIpAddress')
 
 #######################################
-# 5. Libreswan (IPsec) 設定
+# 5. Libreswan (IPsec) config
 #######################################
 
-# Pre-Shared Key の設定
+# Pre-shared key
 cat <<IPSECSECRETSEOF > /etc/ipsec.d/cloudwan.secrets
 ${!CGW_IP_ADDRESS} ${!OUTSIDE_IP_ADDRESS1} : PSK "vpnsecret"
 ${!CGW_IP_ADDRESS} ${!OUTSIDE_IP_ADDRESS2} : PSK "vpnsecret"
 IPSECSECRETSEOF
 
-# IPsec トンネル設定
-# - ikev2=insist: IKEv2 を強制 (AWS VPN の設定に合わせる)
-# - dpddelay/dpdtimeout: DPD プローブを10秒間隔で送信し、AWS が tunnel UP を認識できるようにする
-# - vti-interface: Libreswan が自動で VTI デバイスを作成する
-# - vti-routing=no: VTI のルーティングは FRR (BGP) に任せる
+# IPsec tunnel config
+# - ikev2=insist: force IKEv2 (matches AWS VPN config)
+# - dpddelay/dpdtimeout: send DPD probes every 10s so AWS sees the tunnel UP
+# - vti-interface: Libreswan creates the VTI device
+# - vti-routing=no: leave VTI routing to FRR (BGP)
 cat <<IPSECCONFEOF > /etc/ipsec.d/cloudwan.conf
 conn tunnel1
   type=tunnel
@@ -117,27 +117,27 @@ conn tunnel2
 IPSECCONFEOF
 
 #######################################
-# 6. IPsec 起動 + トンネル接続
+# 6. Start IPsec + bring up tunnels
 #######################################
 
 systemctl enable ipsec
 systemctl start ipsec
 
-# スタック新規作成時、SiteToSiteVpnAttachment の作成に10分以上かかる。
-# VPN エンドポイントが応答可能になるまで待機しないと ipsec auto --up が失敗する。
-echo "VPN Connection が利用可能になるまで待機中..."
+# On fresh stack creation, SiteToSiteVpnAttachment takes 10+ minutes.
+# ipsec auto --up fails unless we wait for the VPN endpoint to respond.
+echo "Waiting for VPN Connection to become available..."
 for i in $(seq 1 90); do
   STATE=$(aws ec2 describe-vpn-connections --vpn-connection-ids ${VPNID} --region ${REGION} --no-cli-pager 2>/dev/null | jq -r '.VpnConnections[].State')
   if [ "${!STATE}" = "available" ]; then
-    echo "VPN Connection が利用可能 (${!i}回目の確認)"
+    echo "VPN Connection available (check ${!i})"
     break
   fi
-  echo "VPN Connection 待機中... (state: ${!STATE}, ${!i}/90)"
+  echo "Waiting for VPN Connection... (state: ${!STATE}, ${!i}/90)"
   sleep 10
 done
 
-# ipsec を再起動して最新の設定をロードし、明示的に接続を開始する。
-# VPN エンドポイントが応答可能になった直後でも数秒かかる場合があるため retry する。
+# Restart ipsec to load the latest config, then start connections explicitly.
+# Retry: the endpoint can take a few seconds even after it becomes available.
 ipsec restart
 sleep 5
 
@@ -146,7 +146,7 @@ for i in $(seq 1 30); do
     echo "Tunnel 1 established"
     break
   fi
-  echo "Tunnel 1 接続試行中... (${!i}/30)"
+  echo "Connecting Tunnel 1... (${!i}/30)"
   sleep 10
 done
 
@@ -155,37 +155,37 @@ for i in $(seq 1 30); do
     echo "Tunnel 2 established"
     break
   fi
-  echo "Tunnel 2 接続試行中... (${!i}/30)"
+  echo "Connecting Tunnel 2... (${!i}/30)"
   sleep 10
 done
 
 #######################################
-# 7. VTI 作成待ち
+# 7. Wait for VTI
 #######################################
 
-# Libreswan が IPsec SA 確立時に VTI デバイスを自動作成する。
-# VTI がないと後続の IP 設定や namespace 移動ができないため待機する。
+# Libreswan creates the VTI device when the IPsec SA is established.
+# Wait, since later IP config and namespace moves need the VTI.
 for i in $(seq 1 30); do
   if ip link show vti1 > /dev/null 2>&1 && ip link show vti2 > /dev/null 2>&1; then
-    echo "VTI デバイス作成完了"
+    echo "VTI device created"
     break
   fi
-  echo "VTI 作成待機中... (${!i}/30)"
+  echo "Waiting for VTI... (${!i}/30)"
   sleep 2
 done
 
 #######################################
-# 8. ネットワーク namespace 構築
+# 8. Build network namespace
 #######################################
 
-# namespace を使ってオンプレミス LAN 側 (ens6) と VPN トンネル (vti1/2) を
-# メインの VPC ルーティングから分離する。
-# これにより FRR の BGP 経路と VPC ローカル経路が干渉しない。
+# Use a namespace to separate the on-prem LAN side (ens6) and VPN tunnels (vti1/2)
+# from the main VPC routing.
+# This keeps FRR BGP routes from clashing with VPC local routes.
 NAMESPACE=vrf1
 ip netns add ${!NAMESPACE}
 
-# IMDS の MAC アドレスで DeviceIndex=1 のインターフェース名を動的に検出する。
-# AL2023 では予測可能な命名 (ens6 等) が使われるが、インスタンスタイプにより異なる可能性があるため固定値にしない。
+# Detect the DeviceIndex=1 interface name via its IMDS MAC address.
+# AL2023 uses predictable names (ens6, etc.) but they can vary by instance type, so don't hardcode.
 for mac in $(curl -s -H "X-aws-ec2-metadata-token: ${!TOKEN}" http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | tr -d '/'); do
   dn=$(curl -s -H "X-aws-ec2-metadata-token: ${!TOKEN}" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${!mac}/device-number")
   if [ "${!dn}" = "1" ]; then
@@ -196,22 +196,22 @@ for mac in $(curl -s -H "X-aws-ec2-metadata-token: ${!TOKEN}" http://169.254.169
   fi
 done
 
-# オンプレミス LAN 側インターフェースを namespace に移動
+# Move on-prem LAN interface into the namespace
 ip link set ${!ETH1_IFACE} netns ${!NAMESPACE} up
 ip netns exec ${!NAMESPACE} ip addr add ${!ETH1_IP}/24 dev ${!ETH1_IFACE}
 
 #######################################
-# 9. VTI を namespace に移動 + トンネル内部 IP 設定
+# 9. Move VTIs into namespace + set tunnel inside IPs
 #######################################
 
-# VTI を namespace に移動することで、BGP ピアリングが vrf1 内で行われる
+# Moving VTIs into the namespace makes BGP peer inside vrf1
 ip link set vti1 netns ${!NAMESPACE}
 ip netns exec ${!NAMESPACE} ip link set vti1 up mtu 1436
 ip link set vti2 netns ${!NAMESPACE}
 ip netns exec ${!NAMESPACE} ip link set vti2 up mtu 1436
 
-# トンネル内部 IP を AWS API から取得して設定する。
-# /30 サブネットの network+1 が AWS 側、network+2 が CGW 側。
+# Set tunnel inside IPs fetched from the AWS API.
+# In the /30, network+1 is the AWS side, network+2 is the CGW side.
 TUNNEL_IP_CIDR1=$(echo "${!VPN_JSON}" | jq -r '.VpnConnections[].Options.TunnelOptions[0].TunnelInsideCidr')
 TUNNEL_IP_CIDR2=$(echo "${!VPN_JSON}" | jq -r '.VpnConnections[].Options.TunnelOptions[1].TunnelInsideCidr')
 
@@ -226,14 +226,14 @@ ip netns exec ${!NAMESPACE} ip addr add ${!TUNNEL_IP_ADDRESS1_CGW}/30 dev vti1
 ip netns exec ${!NAMESPACE} ip addr add ${!TUNNEL_IP_ADDRESS2_CGW}/30 dev vti2
 
 #######################################
-# 10. FRR (BGP) 設定
+# 10. FRR (BGP) config
 #######################################
 
-# VRF vrf1 で BGP を動作させ、Cloud WAN とルートを交換する。
-# - AS 64901: このオンプレミスルーターの AS 番号
-# - remote-as 65002: Cloud WAN の Region2 側 ASN
-# - aggregate-address: VPC CIDR をサマリーとして広告
-# - route-map ALLOW_OUT: 広告するプレフィックスを制限
+# Run BGP in VRF vrf1 and exchange routes with Cloud WAN.
+# - AS 64901: this on-prem router's ASN
+# - remote-as 65002: Cloud WAN Region2 ASN
+# - aggregate-address: advertise the VPC CIDR as a summary
+# - route-map ALLOW_OUT: restrict advertised prefixes
 cat <<FRREOF > /etc/frr/frr.conf
 frr version 10.4
 frr defaults traditional

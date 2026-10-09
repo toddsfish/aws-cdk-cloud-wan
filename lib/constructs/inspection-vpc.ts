@@ -7,21 +7,21 @@ import { Construct } from 'constructs';
 import { ALL_VPC_CIDRS, cloudWanTagKey } from '../network-config';
 
 export interface InspectionVpcProps {
-  /** VPC CIDR ブロック */
+  /** VPC CIDR block */
   readonly vpcCidr: string;
   /** Cloud WAN Core Network ID */
   readonly coreNetworkId: string;
   /** Cloud WAN Core Network ARN */
   readonly coreNetworkArn: string;
-  /** Cloud WAN Network Function Group タグ値 */
+  /** Cloud WAN Network Function Group tag value */
   readonly cloudWanNfgTag: string;
 }
 
 /**
- * Inspection VPC - Network Firewall による検査 + インターネット出口。
- * send-to モードで使用するため、NAT GW / IGW を持つ。
- * 検査後のインターネット向けトラフィックは NAT GW 経由で外部へ。
- * 内部 CIDR 宛のリターントラフィックは Core Network 経由で送信元に返す。
+ * Inspection VPC - Network Firewall inspection + internet egress.
+ * Has NAT GW / IGW because it is used in send-to mode.
+ * Inspected internet-bound traffic exits via NAT GW.
+ * Return traffic to internal CIDRs goes back to the source via the Core Network.
  */
 export class InspectionVpc extends Construct {
   public readonly vpc: ec2.IVpc;
@@ -47,7 +47,7 @@ export class InspectionVpc extends Construct {
     const cloudWanSubnet = vpc.selectSubnets({ subnetGroupName: 'CloudWanAttachment' }).subnets[0];
 
     // Network Firewall Rule Group
-    // NOTE: ruleGroupName/firewallPolicyName/firewallName は CFn L1 必須プロパティ
+    // NOTE: ruleGroupName/firewallPolicyName/firewallName are required CFn L1 properties
     const nfwRuleGroup = new networkfirewall.CfnRuleGroup(this, 'NfwRuleGroup', {
       ruleGroupName: cdk.Names.uniqueResourceName(this, { maxLength: 16 }) + '-RuleGroup',
       capacity: 1000,
@@ -63,17 +63,17 @@ export class InspectionVpc extends Construct {
         },
         rulesSource: {
           rulesString: [
-            // 特定ドメインへの TLS を alert + pass (ssl_state:client_hello で SNI 検査)
+            // Alert + pass TLS to a specific domain (SNI check on ssl_state:client_hello)
             'pass tls any any -> any any (ssl_state:client_hello; tls.sni; content:"checkip.amazonaws.com"; flow:to_server,established; alert; sid:2000001; rev:1; msg:"Access to checkip.amazonaws.com detected";)',
-            // ICMP を alert + pass
+            // Alert + pass ICMP
             'pass icmp any any -> any any (alert; sid:2000002; rev:1; msg:"ICMP ping detected";)',
-            // TCP ハンドシェイクを許可 (確立済みフローを作らない)
+            // Allow TCP handshake (before flow is established)
             'pass tcp any any -> any any (flow:not_established; sid:3000001; rev:1;)',
-            // 確立済み TLS を許可 (alert 対象以外のドメイン)
+            // Allow established TLS (domains not alerted on)
             'pass tls any any -> any any (ssl_state:client_hello; flow:to_server,established; sid:3000002; rev:1;)',
-            // 確立済み TCP を許可 (TLS 以外: HTTP, SSH 等)
+            // Allow established TCP (non-TLS: HTTP, SSH, etc.)
             'pass tcp any any -> any any (flow:established; sid:3000003; rev:1;)',
-            // UDP を許可
+            // Allow UDP
             'pass udp any any -> any any (sid:3000004; rev:1;)',
           ].join('\n') + '\n',
         },
@@ -100,7 +100,7 @@ export class InspectionVpc extends Construct {
       vpcId: vpc.vpcId,
     });
 
-    // NFW Alert ログを CloudWatch Logs に出力
+    // Send NFW alert logs to CloudWatch Logs
     const nfwAlertLogGroup = new logs.LogGroup(this, 'NfwAlertLogGroup', {
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -119,27 +119,27 @@ export class InspectionVpc extends Construct {
       },
     });
 
-    // NFW VPC Endpoint ID を抽出
+    // Extract NFW VPC endpoint ID
     const fwEndpointId = cdk.Fn.select(
       1, cdk.Fn.split(':', cdk.Fn.join(',', nfw.attrEndpointIds)),
     );
 
-    // Cloud WAN Attachment Subnet: Cloud WAN からのトラフィックを NFW へ
+    // Cloud WAN attachment subnet: traffic from Cloud WAN to NFW
     new ec2.CfnRoute(this, 'CloudWanSubnetDefaultRoute', {
       routeTableId: cloudWanSubnet.routeTable.routeTableId,
       destinationCidrBlock: '0.0.0.0/0',
       vpcEndpointId: fwEndpointId,
     });
 
-    // Public Subnet: リターントラフィック (RFC1918) を NFW 経由で Cloud WAN に返す
+    // Public subnet: return traffic (RFC1918) back to Cloud WAN via NFW
     new ec2.CfnRoute(this, 'PublicSubnetInternalRoute', {
       routeTableId: publicSubnet.routeTable.routeTableId,
       destinationCidrBlock: '10.0.0.0/8',
       vpcEndpointId: fwEndpointId,
     });
 
-    // FW Subnet: 検査後のリターントラフィック (RFC1918) を Cloud WAN へ
-    // (インターネット向けは L2 が自動設定した 0.0.0.0/0 → NAT GW を使用)
+    // FW subnet: inspected return traffic (RFC1918) to Cloud WAN
+    // (internet-bound uses the L2-managed 0.0.0.0/0 -> NAT GW route)
     const attachment = new networkmanager.CfnVpcAttachment(this, 'CloudWanAttachment', {
       coreNetworkId: props.coreNetworkId,
       vpcArn: vpc.vpcArn,

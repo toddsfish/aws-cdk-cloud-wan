@@ -5,13 +5,13 @@ import { Construct } from "constructs";
 import { cloudWanTagKey } from "../network-config";
 
 export interface EgressVpcProps {
-  /** VPC CIDR ブロック */
+  /** VPC CIDR block */
   readonly vpcCidr: string;
   /** Cloud WAN Core Network ID */
   readonly coreNetworkId: string;
   /** Cloud WAN Core Network ARN */
   readonly coreNetworkArn: string;
-  /** Cloud WAN セグメント タグ値 */
+  /** Cloud WAN segment tag value */
   readonly cloudWanSegmentTag: string;
 }
 
@@ -21,7 +21,7 @@ export class EgressVpc extends Construct {
   constructor(scope: Construct, id: string, props: EgressVpcProps) {
     super(scope, id);
 
-    // VPC + Subnet + IGW + NAT GW を L2 で自動構築
+    // VPC + subnets + IGW + NAT GW built by L2
     const vpc = new ec2.Vpc(this, "Vpc", {
       ipAddresses: ec2.IpAddresses.cidr(props.vpcCidr),
       maxAzs: 1,
@@ -64,7 +64,7 @@ export class EgressVpc extends Construct {
       }
     );
 
-    // NAT Subnet: リターントラフィックを Cloud WAN へ戻すルート
+    // NAT subnet: route return traffic back to Cloud WAN
     const coreNetworkRoute = new ec2.CfnRoute(
       this,
       "NatSubnetCoreNetworkRoute",

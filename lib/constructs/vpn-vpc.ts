@@ -10,11 +10,11 @@ import { Construct } from "constructs";
 import { RFC1918_CIDRS, VPN_CONFIG, cloudWanTagKey } from "../network-config";
 
 export interface VpnVpcProps {
-  /** VPC CIDR ブロック */
+  /** VPC CIDR block */
   readonly vpcCidr: string;
   /** Cloud WAN Core Network ID */
   readonly coreNetworkId: string;
-  /** Cloud WAN セグメント タグ値 */
+  /** Cloud WAN segment tag value */
   readonly cloudWanSegmentTag: string;
 }
 
@@ -26,7 +26,7 @@ export class VpnVpc extends Construct {
 
     const stack = cdk.Stack.of(this);
 
-    // VPC + Subnet を L2 で構築
+    // VPC + subnets via L2
     const vpc = new ec2.Vpc(this, "Vpc", {
       ipAddresses: ec2.IpAddresses.cidr(props.vpcCidr),
       maxAzs: 1,
@@ -67,7 +67,7 @@ export class VpnVpc extends Construct {
       ec2Sg.addIngressRule(ec2.Peer.ipv4(cidr), ec2.Port.allTraffic());
     }
 
-    // VPN Router ENIs (L1: 複数 ENI + sourceDestCheck=false)
+    // VPN router ENIs (L1: multiple ENIs + sourceDestCheck=false)
     const vpnEni0 = new ec2.CfnNetworkInterface(this, "VpnEni0", {
       description: "eth0",
       sourceDestCheck: false,
@@ -85,7 +85,7 @@ export class VpnVpc extends Construct {
     // VPN Router EIP
     const vpnEip = new ec2.CfnEIP(this, "VpnEip", { domain: "vpc" });
 
-    // Customer Gateway (L1: L2 なし)
+    // Customer Gateway (L1: no L2 available)
     const cgw = new ec2.CfnCustomerGateway(this, "CustomerGateway", {
       type: "ipsec.1",
       bgpAsn: VPN_CONFIG.cgwBgpAsn,
@@ -102,7 +102,7 @@ export class VpnVpc extends Construct {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // VPN トンネルオプション (IKEv2)
+    // VPN tunnel options (IKEv2)
     const tunnelOptions = {
       ikeVersions: [{ value: "ikev2" }],
       phase1EncryptionAlgorithms: [
@@ -177,7 +177,7 @@ export class VpnVpc extends Construct {
       },
     };
 
-    // VPN Connection (L1: Cloud WAN 用パターン + 詳細トンネルオプション)
+    // VPN Connection (L1: Cloud WAN pattern + detailed tunnel options)
     const vpnConn = new ec2.CfnVPNConnection(this, "VpnConnection", {
       type: "ipsec.1",
       staticRoutesOnly: false,
@@ -196,7 +196,7 @@ export class VpnVpc extends Construct {
       ],
     });
 
-    // UserData (Fn::Sub で VPNID / REGION を置換)
+    // UserData (Fn::Sub substitutes VPNID / REGION)
     const userDataScript = fs.readFileSync(
       path.join(__dirname, "../../src/ec2/vpn-router-userdata.sh"),
       "utf-8"
@@ -207,7 +207,7 @@ export class VpnVpc extends Construct {
       VPC_CIDR: props.vpcCidr,
     });
 
-    // VPN Router 用 IAM Role (UserData で AWS API を呼ぶための最小権限)
+    // VPN router IAM role (least privilege for AWS API calls in UserData)
     const vpnRouterRole = new iam.Role(this, "VpnRouterRole", {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
       inlinePolicies: {
@@ -222,7 +222,7 @@ export class VpnVpc extends Construct {
       },
     });
 
-    // VPN Router EC2 (L1: 3 ENI 構成)
+    // VPN router EC2 (L1: 3-ENI layout)
     const vpnRouterAmiId = ssm.StringParameter.valueForStringParameter(
       this,
       "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
@@ -246,7 +246,7 @@ export class VpnVpc extends Construct {
       networkInterfaceId: vpnEni0.attrId,
     });
 
-    // オンプレミス側 EC2 (L2: 単一 ENI)
+    // On-prem side EC2 (L2: single ENI)
     new ec2.Instance(this, "Instance", {
       vpc,
       vpcSubnets: { subnets: [privateSubnet] },
@@ -274,7 +274,7 @@ export class VpnVpc extends Construct {
       securityGroupIds: [eicSg.securityGroupId],
     });
 
-    // Private Subnet ルート (VPN Router eth1 経由)
+    // Private subnet route (via VPN router eth1)
     new ec2.CfnRoute(this, "PrivateSubnetDefaultRoute", {
       routeTableId: privateSubnet.routeTable.routeTableId,
       destinationCidrBlock: "0.0.0.0/0",

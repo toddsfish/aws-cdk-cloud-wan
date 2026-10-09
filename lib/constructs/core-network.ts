@@ -9,9 +9,9 @@ import {
 } from "../network-config";
 
 export interface CoreNetworkProps {
-  /** Cloud WAN Edge Location 1 のリージョン */
+  /** Region for Cloud WAN edge location 1 */
   readonly region1: string;
-  /** Cloud WAN Edge Location 2 のリージョン */
+  /** Region for Cloud WAN edge location 2 */
   readonly region2: string;
 }
 
