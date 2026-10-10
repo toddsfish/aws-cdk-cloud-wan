@@ -27,13 +27,13 @@ README lists `pnpm build` / `pnpm watch`; those scripts do not exist in `package
 
 ```
 bin/aws-cdk-cloud-wan.ts
- ├─ CloudWanRegion1Stack (ap-northeast-1)
+ ├─ CloudWanRegion1Stack (ap-southeast-2)
  │   ├─ CoreNetwork   GlobalNetwork + CoreNetwork + policy (global resource, lives here)
  │   ├─ EgressVpc     seg=share   NAT GW egress
  │   ├─ PrivateVpc    seg=prod
  │   ├─ PrivateVpc    seg=dev
  │   └─ InspectionVpc nfg=security  Network Firewall + NAT GW
- └─ CloudWanRegion2Stack (us-east-1)  depends on Region1
+ └─ CloudWanRegion2Stack (us-west-2)  depends on Region1
      ├─ EgressVpc     seg=share
      ├─ PrivateVpc    seg=prod
      └─ VpnVpc        seg=dev   Libreswan+FRR EC2 router = fake on-prem, S2S VPN attachment

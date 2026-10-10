@@ -5,8 +5,8 @@ import { Region2Stack } from '../lib/region2-stack';
 
 const app = new cdk.App();
 
-const region1 = 'ap-northeast-1';
-const region2 = 'us-east-1';
+const region1 = 'ap-southeast-2';
+const region2 = 'us-west-2';
 
 const region1Stack = new Region1Stack(app, 'CloudWanRegion1Stack', {
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: region1 },
