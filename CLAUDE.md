@@ -49,6 +49,7 @@ bin/aws-cdk-cloud-wan.ts
 - **InspectionVpc routing**: Cloud WAN subnet `0.0.0.0/0` → NFW endpoint; FW subnet `10.0.0.0/8` → core network, default → NAT GW; public subnet `10.0.0.0/8` → NFW (symmetric return). Attachment uses `applianceModeSupport`. NFW endpoint ID is parsed from `attrEndpointIds` (`az:vpce-id`) with `Fn.split`/`Fn.select`. Stateful rules are `STRICT_ORDER` with default `drop_established`; ALERT logs go to CloudWatch.
 - **Core-network routes** (`CfnRoute` with `coreNetworkArn`) must `addDependency(attachment)` or deploy fails before the attachment is available.
 - **VPN router**: `src/ec2/vpn-router-userdata.sh` is injected with `Fn.sub` (`${VPNID}`, `${REGION}`, `${VPC_CIDR}` are CFn-substituted; shell vars must be escaped as `${!VAR}`). At boot it reads tunnel details via `ec2:DescribeVpnConnections` and configures Libreswan + FRR BGP (CGW ASN `64901`).
+- **Self-destruct**: both stacks extend `TempStack` (`@cloudcomponents/cdk-temp-stack`); each deletes itself when its TTL expires, timed from its TTL resource's creation (`bin/aws-cdk-cloud-wan.ts`). Region1 TTL > Region2 TTL so Region2 deletes first. Tests must pass `ttl`.
 - All VPCs are single-AZ (`maxAzs: 1`) to keep cost down. Private VPCs use EC2 Instance Connect Endpoints + SSM for access.
 
 ## Conventions

@@ -1,6 +1,5 @@
-import * as cdk from "aws-cdk-lib/core";
-
 import { Construct } from "constructs";
+import { TempStack, TempStackProps } from "@cloudcomponents/cdk-temp-stack";
 import {
   CoreNetwork,
   EgressVpc,
@@ -13,11 +12,11 @@ import {
   cloudWanNfg,
 } from "./network-config";
 
-export interface Region1StackProps extends cdk.StackProps {
+export interface Region1StackProps extends TempStackProps {
   readonly region2: string;
 }
 
-export class Region1Stack extends cdk.Stack {
+export class Region1Stack extends TempStack {
   public readonly coreNetworkId: string;
   public readonly coreNetworkArn: string;
 

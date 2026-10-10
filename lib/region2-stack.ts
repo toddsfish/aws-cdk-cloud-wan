@@ -1,15 +1,14 @@
-import * as cdk from 'aws-cdk-lib/core';
-
 import { Construct } from 'constructs';
+import { TempStack, TempStackProps } from '@cloudcomponents/cdk-temp-stack';
 import { EgressVpc, PrivateVpc, VpnVpc } from './constructs';
 import { REGION2_NETWORK, cloudWanSegment } from './network-config';
 
-export interface Region2StackProps extends cdk.StackProps {
+export interface Region2StackProps extends TempStackProps {
   readonly coreNetworkId: string;
   readonly coreNetworkArn: string;
 }
 
-export class Region2Stack extends cdk.Stack {
+export class Region2Stack extends TempStack {
   constructor(scope: Construct, id: string, props: Region2StackProps) {
     super(scope, id, props);
 

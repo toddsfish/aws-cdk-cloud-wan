@@ -9,6 +9,7 @@ describe('Region1Stack', () => {
   const stack = new Region1Stack(app, 'TestRegion1Stack', {
     env: { account: '123456789012', region: 'ap-northeast-1' },
     region2: 'us-east-1',
+    ttl: cdk.Duration.minutes(10),
   });
   const template = Template.fromStack(stack);
 
@@ -45,6 +46,7 @@ describe('Region2Stack', () => {
     env: { account: '123456789012', region: 'us-east-1' },
     coreNetworkId: 'core-network-123',
     coreNetworkArn: 'arn:aws:networkmanager::123456789012:core-network/core-network-123',
+    ttl: cdk.Duration.minutes(10),
   });
   const template = Template.fromStack(stack);
 
